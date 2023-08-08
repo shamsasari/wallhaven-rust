@@ -1,5 +1,11 @@
-use std::fs;
+#[cfg(windows)]
+extern crate winapi;
+
+use std::{env, fs};
+use std::ffi::CString;
 use serde::Deserialize;
+use winapi::um::winnt::PVOID;
+use winapi::um::winuser::{SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SystemParametersInfoA};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoop;
 
@@ -14,7 +20,22 @@ fn main() {
     let resolution = monitor.size();
     let result = find_matching_wallpaper(&config, &resolution).expect("Unable to query for wallpaper");
     let wallpaper_info = result.expect("No matching wallpaper found");
-    println!("{:#?}", &wallpaper_info);
+
+    let wallpaper_file = env::temp_dir().join("wallhaven").join(&wallpaper_info.id);
+    let wallpaper = reqwest::blocking::get(&wallpaper_info.path).unwrap().bytes().unwrap();
+    fs::create_dir_all(&wallpaper_file.parent().unwrap()).unwrap();
+    fs::write(&wallpaper_file, wallpaper).expect("Unable to write wallpaper");
+
+    let wallpaper_file = CString::new(wallpaper_file.into_os_string().into_string().unwrap()).unwrap();
+
+    unsafe {
+        SystemParametersInfoA(
+            SPI_SETDESKWALLPAPER,
+            0,
+            wallpaper_file.as_ptr() as PVOID,
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+        );
+    }
 }
 
 fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> reqwest::Result<Option<WallpaperInfo>> {
@@ -37,6 +58,7 @@ fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> r
             tag_is_not_excluded(&exclude_similar_tags, tag)
         });
         if matching {
+            println!("{} {:?}", info.url, tags);
             return Ok(Some(info));
         }
         println!("{} does not match", info.url)
