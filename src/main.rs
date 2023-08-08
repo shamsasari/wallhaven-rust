@@ -9,24 +9,53 @@ fn main() {
     let config_file = app_dir.join("wallhaven-plugin.json");
     let config_string = fs::read_to_string(config_file).expect("Unable to read config");
     let config: Config = serde_json::from_str(config_string.as_str()).expect("Invalid config");
+
     let monitor = EventLoop::new().available_monitors().next().expect("No monitors found!");
     let resolution = monitor.size();
-    let result = find_matching_wallpaper(&config, &resolution);
-    println!("{:#?}", result)
+    let result = find_matching_wallpaper(&config, &resolution).expect("Unable to query for wallpaper");
+    let wallpaper_info = result.expect("No matching wallpaper found");
+    println!("{:#?}", &wallpaper_info);
 }
 
 fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> reqwest::Result<Option<WallpaperInfo>> {
+    let exclude_similar_tags: Vec<String> = config.exclude_similar_tags
+        .iter()
+        .map(|tag| tag.to_lowercase())
+        .collect();
+
     let mut url = String::from("https://wallhaven.cc/api/v1/search?sorting=random");
-    url.push_str("&resolutions=");
-    url.push_str(&resolution.width.to_string());
-    url.push('x');
-    url.push_str(&resolution.height.to_string());
+    url.push_str(format!("&resolutions={}x{}", &resolution.width, &resolution.height).as_str());
     if let Some(q) = &config.q {
         url.push_str("&q=");
         url.push_str(q);
     }
-    let response: QueryResult = reqwest::blocking::get(url)?.json()?;
-    Ok(response.data.into_iter().next())
+    let result: QueryResult = reqwest::blocking::get(url)?.json()?;
+
+    for info in result.data {
+        let tags = get_wallpaper_tags(&info.id)?;
+        let matching = tags.iter().all(|tag| {
+            tag_is_not_excluded(&exclude_similar_tags, tag)
+        });
+        if matching {
+            return Ok(Some(info));
+        }
+        println!("{} does not match", info.url)
+    };
+
+    return Ok(None);
+}
+
+fn tag_is_not_excluded(exclude_similar_tags: &Vec<String>, tag: &String) -> bool {
+    exclude_similar_tags.iter().all(|exclude| !tag.contains(exclude))
+}
+
+fn get_wallpaper_tags(id: &str) -> reqwest::Result<Vec<String>> {
+    let response: WallpaperDetailWrapper = reqwest::blocking::get(format!("https://wallhaven.cc/api/v1/w/{id}"))?.json()?;
+    let tag_names = response.data.tags
+        .iter()
+        .map(|tag| tag.name.to_lowercase())
+        .collect();
+    Ok(tag_names)
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -53,6 +82,21 @@ struct WallpaperInfo {
 struct Metadata {
     last_page: u32,
     seed: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct WallpaperDetailWrapper {
+    data: WallpaperDetail,
+}
+
+#[derive(Deserialize, Debug)]
+struct WallpaperDetail {
+    tags: Vec<WallpaperTag>,
+}
+
+#[derive(Deserialize, Debug)]
+struct WallpaperTag {
+    name: String,
 }
 
 
