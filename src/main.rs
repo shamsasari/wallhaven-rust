@@ -1,8 +1,16 @@
+#![windows_subsystem = "windows"]
+
 #[cfg(windows)]
 extern crate winapi;
 
 use std::{env, fs};
 use std::ffi::CString;
+use std::path::PathBuf;
+
+use log::{info, LevelFilter, warn};
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::encode::pattern::PatternEncoder;
 use serde::Deserialize;
 use winapi::um::winnt::PVOID;
 use winapi::um::winuser::{SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SystemParametersInfoA};
@@ -12,6 +20,9 @@ use winit::event_loop::EventLoop;
 fn main() {
     let home_dir = dirs::home_dir().expect("We have no home!");
     let app_dir = home_dir.join("wallhaven-plugin");
+
+    init_logging(&app_dir);
+
     let config_file = app_dir.join("wallhaven-plugin.json");
     let config_string = fs::read_to_string(config_file).expect("Unable to read config");
     let config: Config = serde_json::from_str(config_string.as_str()).expect("Invalid config");
@@ -19,7 +30,14 @@ fn main() {
     let monitor = EventLoop::new().available_monitors().next().expect("No monitors found!");
     let resolution = monitor.size();
     let result = find_matching_wallpaper(&config, &resolution).expect("Unable to query for wallpaper");
-    let wallpaper_info = result.expect("No matching wallpaper found");
+
+    let wallpaper_info = match result {
+        Some(w) => w,
+        None => {
+            warn!("No matching wallpaper found");
+            return;
+        },
+    };
 
     let wallpaper_file = env::temp_dir().join("wallhaven").join(&wallpaper_info.id);
     let wallpaper = reqwest::blocking::get(&wallpaper_info.path).unwrap().bytes().unwrap();
@@ -36,6 +54,20 @@ fn main() {
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
         );
     }
+}
+
+fn init_logging(app_dir: &PathBuf) {
+    let main_log = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} - {m}{n}")))
+        .build(app_dir.join("main.log"))
+        .unwrap();
+
+    let config = log4rs::config::Config::builder()
+        .appender(Appender::builder().build("main_log", Box::new(main_log)))
+        .build(Root::builder().appender("main_log").build(LevelFilter::Info))
+        .unwrap();
+
+    log4rs::init_config(config).unwrap();
 }
 
 fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> reqwest::Result<Option<WallpaperInfo>> {
@@ -58,10 +90,10 @@ fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> r
             tag_is_not_excluded(&exclude_similar_tags, tag)
         });
         if matching {
-            println!("{} {:?}", info.url, tags);
+            info!("{} {:?}", info.url, tags);
             return Ok(Some(info));
         }
-        println!("{} does not match", info.url)
+        info!("{} does not match", info.url)
     };
 
     return Ok(None);
