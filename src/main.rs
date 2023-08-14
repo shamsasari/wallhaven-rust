@@ -6,7 +6,7 @@ extern crate winapi;
 use std::{env, fs};
 use std::error::Error;
 use std::ffi::CString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use log::{info, LevelFilter, warn};
 use log4rs::append::file::FileAppender;
@@ -20,7 +20,7 @@ use winit::event_loop::EventLoop;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let home_dir = dirs::home_dir().ok_or("Unable to determine user home dir")?;
-    let app_dir = home_dir.join("wallhaven-plugin");
+    let app_dir = home_dir.create_dir_if_absent("wallhaven-plugin")?;
 
     init_logging(&app_dir);
 
@@ -39,8 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    let wallhaven_temp_dir = env::temp_dir().join("wallhaven");
-    fs::create_dir_all(&wallhaven_temp_dir)?;
+    let wallhaven_temp_dir = env::temp_dir().create_dir_if_absent("wallhaven")?;
     let wallpaper_file = wallhaven_temp_dir.join(&wallpaper_info.id);
     let wallpaper_bytes = reqwest::blocking::get(&wallpaper_info.path)?.bytes()?;
     fs::write(&wallpaper_file, wallpaper_bytes)?;
@@ -158,6 +157,17 @@ struct WallpaperDetail {
 #[derive(Deserialize, Debug)]
 struct WallpaperTag {
     name: String,
+}
+
+trait PathBufExt {
+    fn create_dir_if_absent<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, std::io::Error>;
+}
+
+impl PathBufExt for PathBuf {
+    fn create_dir_if_absent<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, std::io::Error> {
+        let dir = self.join(path);
+        fs::create_dir_all(&dir).map(|_| dir)
+    }
 }
 
 
