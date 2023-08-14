@@ -7,8 +7,9 @@ use std::{env, fs};
 use std::error::Error;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::process::exit;
 
-use log::{info, LevelFilter, warn};
+use log::{error, info, LevelFilter};
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
@@ -18,37 +19,42 @@ use winapi::um::winuser::{SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE, SPIF_UPDATEINIF
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoop;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let home_dir = dirs::home_dir().ok_or("Unable to determine user home dir")?;
-    let app_dir = home_dir.create_dir_if_absent("wallhaven-plugin")?;
+fn main() {
+    let home_dir = dirs::home_dir().expect("Unable to determine user home dir");
+    let app_dir = home_dir.create_dir_if_absent("wallhaven-plugin").expect("Unable to create app dir");
 
-    init_logging(&app_dir);
+    init_logging(&app_dir).expect("Unable to initialise logging");
 
+    if let Some(err) = run(app_dir).err() {
+        error!("Unable to change wallpaper: {:?}", err);
+        exit(1);
+    }
+}
+
+fn run(app_dir: PathBuf) -> Result<(), Box<dyn Error>> {
     let config_file = app_dir.join("wallhaven-plugin.json");
     let config_string = fs::read_to_string(config_file)?;
     let config: Config = serde_json::from_str(config_string.as_str())?;
 
-    let monitor = EventLoop::new().available_monitors().next().ok_or("Unable to find monitor")?;
-    let result = find_matching_wallpaper(&config, &monitor.size())?;
+    let screen_resolution = EventLoop::new()
+        .available_monitors()
+        .next()
+        .ok_or("Unable to find monitor")?
+        .size();
 
-    let wallpaper_info = match result {
-        Some(w) => w,
-        None => {
-            warn!("No matching wallpaper found");
-            return Ok(());
-        },
-    };
+    let wallpaper_info = find_matching_wallpaper(&config, &screen_resolution)?
+        .ok_or("No matching wallpaper found")?;
 
     let wallhaven_temp_dir = env::temp_dir().create_dir_if_absent("wallhaven")?;
     let wallpaper_file = wallhaven_temp_dir.join(&wallpaper_info.id);
     let wallpaper_bytes = reqwest::blocking::get(&wallpaper_info.path)?.bytes()?;
     fs::write(&wallpaper_file, wallpaper_bytes)?;
 
-    let wallpaper_path_string = wallpaper_file
+    let wallpaper_file_path_string = wallpaper_file
         .into_os_string()
         .into_string()
         .map_err(|e| "Invalid wallpaper file path")?;
-    let wallpaper_file = CString::new(wallpaper_path_string)?;
+    let wallpaper_file = CString::new(wallpaper_file_path_string)?;
 
     unsafe {
         SystemParametersInfoA(
@@ -62,18 +68,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn init_logging(app_dir: &PathBuf) {
+fn init_logging(app_dir: &PathBuf) -> Result<(), Box<dyn Error>> {
     let main_log = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} - {m}{n}")))
-        .build(app_dir.join("main.log"))
-        .unwrap();
+        .build(app_dir.join("main.log"))?;
 
     let config = log4rs::config::Config::builder()
         .appender(Appender::builder().build("main_log", Box::new(main_log)))
-        .build(Root::builder().appender("main_log").build(LevelFilter::Info))
-        .unwrap();
+        .build(Root::builder().appender("main_log").build(LevelFilter::Info))?;
 
-    log4rs::init_config(config).unwrap();
+    log4rs::init_config(config)?;
+
+    Ok(())
 }
 
 fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> reqwest::Result<Option<WallpaperInfo>> {
@@ -174,6 +180,7 @@ impl PathBufExt for PathBuf {
 #[cfg(test)]
 mod manual_tests {
     use rand::random;
+
     use super::*;
 
     static DEFAULT_RESOLUTION: PhysicalSize<u32> = PhysicalSize::new(3840, 2160);
