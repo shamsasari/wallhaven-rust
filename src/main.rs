@@ -4,6 +4,7 @@
 extern crate winapi;
 
 use std::{env, fs};
+use std::error::Error;
 use std::ffi::CString;
 use std::path::PathBuf;
 
@@ -17,34 +18,38 @@ use winapi::um::winuser::{SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE, SPIF_UPDATEINIF
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoop;
 
-fn main() {
-    let home_dir = dirs::home_dir().expect("We have no home!");
+fn main() -> Result<(), Box<dyn Error>> {
+    let home_dir = dirs::home_dir().ok_or("Unable to determine user home dir")?;
     let app_dir = home_dir.join("wallhaven-plugin");
 
     init_logging(&app_dir);
 
     let config_file = app_dir.join("wallhaven-plugin.json");
-    let config_string = fs::read_to_string(config_file).expect("Unable to read config");
-    let config: Config = serde_json::from_str(config_string.as_str()).expect("Invalid config");
+    let config_string = fs::read_to_string(config_file)?;
+    let config: Config = serde_json::from_str(config_string.as_str())?;
 
-    let monitor = EventLoop::new().available_monitors().next().expect("No monitors found!");
-    let resolution = monitor.size();
-    let result = find_matching_wallpaper(&config, &resolution).expect("Unable to query for wallpaper");
+    let monitor = EventLoop::new().available_monitors().next().ok_or("Unable to find monitor")?;
+    let result = find_matching_wallpaper(&config, &monitor.size())?;
 
     let wallpaper_info = match result {
         Some(w) => w,
         None => {
             warn!("No matching wallpaper found");
-            return;
+            return Ok(());
         },
     };
 
-    let wallpaper_file = env::temp_dir().join("wallhaven").join(&wallpaper_info.id);
-    let wallpaper = reqwest::blocking::get(&wallpaper_info.path).unwrap().bytes().unwrap();
-    fs::create_dir_all(&wallpaper_file.parent().unwrap()).unwrap();
-    fs::write(&wallpaper_file, wallpaper).expect("Unable to write wallpaper");
+    let wallhaven_temp_dir = env::temp_dir().join("wallhaven");
+    fs::create_dir_all(&wallhaven_temp_dir)?;
+    let wallpaper_file = wallhaven_temp_dir.join(&wallpaper_info.id);
+    let wallpaper_bytes = reqwest::blocking::get(&wallpaper_info.path)?.bytes()?;
+    fs::write(&wallpaper_file, wallpaper_bytes)?;
 
-    let wallpaper_file = CString::new(wallpaper_file.into_os_string().into_string().unwrap()).unwrap();
+    let wallpaper_path_string = wallpaper_file
+        .into_os_string()
+        .into_string()
+        .map_err(|e| "Invalid wallpaper file path")?;
+    let wallpaper_file = CString::new(wallpaper_path_string)?;
 
     unsafe {
         SystemParametersInfoA(
@@ -54,6 +59,8 @@ fn main() {
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
         );
     }
+
+    Ok(())
 }
 
 fn init_logging(app_dir: &PathBuf) {
