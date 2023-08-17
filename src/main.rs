@@ -53,7 +53,7 @@ fn run(app_dir: PathBuf) -> Result<(), Box<dyn Error>> {
     let wallpaper_file_path_string = wallpaper_file
         .into_os_string()
         .into_string()
-        .map_err(|e| "Invalid wallpaper file path")?;
+        .map_err(|_| "Invalid wallpaper file path")?;
     let wallpaper_file = CString::new(wallpaper_file_path_string)?;
 
     unsafe {
@@ -89,7 +89,7 @@ fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> r
         .collect();
 
     let mut url = String::from("https://wallhaven.cc/api/v1/search?sorting=random");
-    url.push_str(format!("&resolutions={}x{}", &resolution.width, &resolution.height).as_str());
+    url.push_str(format!("&atleast={}x{}", &resolution.width, &resolution.height).as_str());
     if let Some(q) = &config.q {
         url.push_str("&q=");
         url.push_str(q);
