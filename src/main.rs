@@ -18,6 +18,9 @@ use winapi::um::winnt::PVOID;
 use winapi::um::winuser::{SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SystemParametersInfoA};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoop;
+use crate::wallhaven::WallpaperInfo;
+
+mod wallhaven;
 
 fn main() {
     let home_dir = dirs::home_dir().expect("Unable to determine user home dir");
@@ -88,13 +91,7 @@ fn find_matching_wallpaper(config: &Config, resolution: &PhysicalSize<u32>) -> r
         .map(|tag| tag.to_lowercase())
         .collect();
 
-    let mut url = String::from("https://wallhaven.cc/api/v1/search?sorting=random");
-    url.push_str(format!("&atleast={}x{}", &resolution.width, &resolution.height).as_str());
-    if let Some(q) = &config.q {
-        url.push_str("&q=");
-        url.push_str(q);
-    }
-    let result: QueryResult = reqwest::blocking::get(url)?.json()?;
+    let result = wallhaven::search(config.q.as_deref(), &resolution)?;
 
     for info in result.data {
         let tags = get_wallpaper_tags(&info.id)?;
@@ -116,8 +113,8 @@ fn tag_is_not_excluded(exclude_similar_tags: &Vec<String>, tag: &String) -> bool
 }
 
 fn get_wallpaper_tags(id: &str) -> reqwest::Result<Vec<String>> {
-    let response: WallpaperDetailWrapper = reqwest::blocking::get(format!("https://wallhaven.cc/api/v1/w/{id}"))?.json()?;
-    let tag_names = response.data.tags
+    let response = wallhaven::get_wallpaper(id)?;
+    let tag_names = response.tags
         .iter()
         .map(|tag| tag.name.to_lowercase())
         .collect();
@@ -129,40 +126,6 @@ struct Config {
     q: Option<String>,
     #[serde(rename = "excludeSimilarTags", default)]
     exclude_similar_tags: Vec<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct QueryResult {
-    data: Vec<WallpaperInfo>,
-    meta: Metadata,
-}
-
-#[derive(Deserialize, Debug)]
-struct WallpaperInfo {
-    id: String,
-    url: String,
-    path: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Metadata {
-    last_page: u32,
-    seed: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct WallpaperDetailWrapper {
-    data: WallpaperDetail,
-}
-
-#[derive(Deserialize, Debug)]
-struct WallpaperDetail {
-    tags: Vec<WallpaperTag>,
-}
-
-#[derive(Deserialize, Debug)]
-struct WallpaperTag {
-    name: String,
 }
 
 trait PathBufExt {
